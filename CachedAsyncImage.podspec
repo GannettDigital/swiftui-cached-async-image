@@ -9,7 +9,7 @@ Pod::Spec.new do |s|
                    DESC
 
   s.homepage     = "https://github.com/GannettDigital/swiftui-cached-async-image"
-  s.license      = { :type => "MIT", :file => "LICENSE" }
+  s.license      = { :type => "MIT", :file => "LICENSE.md" }
   s.author       = { "Lorenzo Fiamingo" => "https://github.com/lorenzofiamingo" }
 
   s.ios.deployment_target = "13.0"
