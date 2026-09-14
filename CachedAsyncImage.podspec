@@ -1,7 +1,7 @@
 Pod::Spec.new do |s|
 
   s.name         = "CachedAsyncImage"
-  s.version      = "2.1.2"
+  s.version      = "2.1.3"
   s.summary      = "CachedAsyncImage is the simplest way to add cache to your AsyncImage."
 
   s.description  = <<-DESC
