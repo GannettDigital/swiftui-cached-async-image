@@ -4,6 +4,15 @@
 
 import SwiftUI
 
+// One session for the URLCache.shared case; creating one per view was costly.
+private enum SharedImageSession {
+    static let session: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.urlCache = .shared
+        return URLSession(configuration: configuration)
+    }()
+}
+
 /// A view that asynchronously loads, cache and displays an image.
 ///
 /// This view uses a custom default
@@ -294,22 +303,18 @@ public struct CachedAsyncImage<Content>: View where Content: View {
     ///   - content: A closure that takes the load phase as an input, and
     ///     returns the view to display for the specified phase.
     public init(urlRequest: URLRequest?, urlCache: URLCache = .shared, scale: CGFloat = 1, transaction: Transaction = Transaction(), @ViewBuilder content: @escaping (AsyncImagePhase) -> Content) {
-        let configuration = URLSessionConfiguration.default
-        configuration.urlCache = urlCache
+        if urlCache === URLCache.shared {
+            self.urlSession = SharedImageSession.session
+        } else {
+            let configuration = URLSessionConfiguration.default
+            configuration.urlCache = urlCache
+            self.urlSession = URLSession(configuration: configuration)
+        }
         self.urlRequest = urlRequest
-        self.urlSession =  URLSession(configuration: configuration)
         self.scale = scale
         self.transaction = transaction
         self.content = content
-        
         self._phase = State(wrappedValue: .empty)
-        do {
-            if let urlRequest = urlRequest, let image = try cachedImage(from: urlRequest, cache: urlCache) {
-                self._phase = State(wrappedValue: .success(image))
-            }
-        } catch {
-            self._phase = State(wrappedValue: .failure(error))
-        }
     }
     
     @Sendable
@@ -317,6 +322,7 @@ public struct CachedAsyncImage<Content>: View where Content: View {
         do {
             if let urlRequest = urlRequest {
                 let (image, metrics) = try await remoteImage(from: urlRequest, session: urlSession)
+                if Task.isCancelled { return }
                 if metrics.transactionMetrics.last?.resourceFetchType == .localCache {
                     // WARNING: This does not behave well when the url is changed with another
                     phase = .success(image)
@@ -331,6 +337,7 @@ public struct CachedAsyncImage<Content>: View where Content: View {
                 }
             }
         } catch {
+            if Task.isCancelled { return }
             withAnimation(transaction.animation) {
                 phase = .failure(error)
             }
@@ -359,24 +366,28 @@ private extension CachedAsyncImage {
             let lastCachedResponse = CachedURLResponse(response: lastResponse, data: data)
             session.configuration.urlCache!.storeCachedResponse(lastCachedResponse, for: request)
         }
-        return (try image(from: data), metrics)
+        try Task.checkCancellation()
+        return (try await image(from: data), metrics)
     }
     
-    private func cachedImage(from request: URLRequest, cache: URLCache) throws -> Image? {
-        guard let cachedResponse = cache.cachedResponse(for: request) else { return nil }
-        return try image(from: cachedResponse.data)
-    }
-    
-    private func image(from data: Data) throws -> Image {
+    private func image(from data: Data) async throws -> Image {
 #if os(macOS)
         if let nsImage = NSImage(data: data) {
             return Image(nsImage: nsImage)
         } else {
             throw AsyncImage<Content>.LoadingError()
         }
-#else
+#elseif os(watchOS)
         if let uiImage = UIImage(data: data, scale: scale) {
             return Image(uiImage: uiImage)
+        } else {
+            throw AsyncImage<Content>.LoadingError()
+        }
+#else
+        if let uiImage = UIImage(data: data, scale: scale) {
+            // Decode now, off the main thread, instead of at first draw.
+            let prepared = await uiImage.byPreparingForDisplay() ?? uiImage
+            return Image(uiImage: prepared)
         } else {
             throw AsyncImage<Content>.LoadingError()
         }
